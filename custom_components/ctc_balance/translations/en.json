@@ -1,0 +1,69 @@
+{
+  "title": "CTC Balance",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Usage Instructions",
+        "description": "### Please confirm the following information:\n1. You have fully read and accepted the **Disclaimer** on the project homepage.\n2. You have fully read the **Usage Instructions** on the project homepage.\n3. You have fully read the **detailed configuration and usage guide**.\n4. You have obtained the Device ID through the **SMS Fire Rite**.",
+        "data": {
+          "accept_terms": "I confirm the above information and willingly accept all causal outcomes of the simulation."
+        }
+      },
+      "account": {
+        "title": "CTC Account Configuration",
+        "description": "### Notes:\n- Please enter your account identifier, access password, and Device ID.\n- The system uses persistent credentials for silent synchronization to ensure stability.\n- Supports multiple accounts, up to 3 accounts.\n- Multiple account additions may have a delay, please be patient.",
+        "data": {
+          "phonenum": "Account Identifier",
+          "password": "Access Password",
+          "device_id": "Device ID"
+        }
+      },
+      "reconfigure": {
+        "title": "Update CTC Access Credentials",
+        "description": "Your access credentials have expired or the connection has been interrupted. Please update your access password or Device ID.",
+        "data": {
+          "phonenum": "Account Identifier",
+          "password": "New Access Password",
+          "device_id": "Device ID"
+        }
+      }
+    },
+    "error": {
+      "terms_not_accepted": "Please confirm the usage instructions first",
+      "invalid_phone_format": "Account format error (requires 11 digits)",
+      "cannot_connect": "Unable to reach the server or the account is temporarily restricted",
+      "login_cooldown": "Security protection: too many attempts, please try again in 10 minutes",
+      "invalid_auth": "Invalid credentials, please check the password or device ID",
+      "need_captcha": "Security verification triggered! Please log in once via the official mobile app to lift the restriction.",
+      "reconfigure_failed": "Failed to update credentials, please check the password or device ID",
+      "unknown": "An unknown error occurred"
+    },
+    "abort": {
+      "already_configured": "This account is already configured",
+      "max_accounts_reached": "Account limit reached (max 3 accounts). Please remove extra accounts and try again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sync Options",
+        "data": {
+          "scan_interval": "Sync Frequency"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {
+        "name": "Account Balance"
+      },
+      "flow_used": {
+        "name": "Data Usage"
+      },
+      "voice_used": {
+        "name": "Voice Usage"
+      }
+    }
+  }
+}
