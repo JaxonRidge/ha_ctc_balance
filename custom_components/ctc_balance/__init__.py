@@ -25,7 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CtcBalanceConfigEntry) -
     # 获取版本号用于缓存控制
     integration = await async_get_integration(hass, DOMAIN)
     version = str(integration.version) or "1.0.0"
-    # 注册前端资源
+
     if f"{DOMAIN}_assets_registered" not in hass.data:
         local_path = hass.config.path("custom_components", DOMAIN, "www")
         if os.path.exists(local_path):
@@ -82,10 +82,3 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         store = Store(hass, 1, storage_key)
         await store.async_remove()
         LOGGER.info("账号 %s 的本地缓存已清理", phonenum[:3] + "****")
-
-async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """处理配置版本迁移逻辑."""
-    if config_entry.version == 1:
-        # 预留版本迁移位置
-        pass
-    return True

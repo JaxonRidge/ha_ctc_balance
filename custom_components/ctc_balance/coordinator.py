@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.util.dt import now as dt_now
 
 from .const import DOMAIN, LOGGER, CONF_SCAN_INTERVAL
 
 class CtcBalanceCoordinator(DataUpdateCoordinator):
     """管理数据异步占验与推演逻辑."""
 
-    def __init__(self, hass: HomeAssistant, api, version: str, entry):
+    def __init__(self, hass: HomeAssistant, api, version: str, entry: ConfigEntry):
         """初始化推演协调器."""
         self.api = api
         self.version = version
@@ -24,16 +27,14 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             LOGGER,
+            config_entry=entry,
             name=DOMAIN,
             update_interval=timedelta(hours=scan_interval_hours),
         )
 
     def _get_gate_limit(self) -> int:
         """动态计算环境定力上限."""
-        try:
-            return len(DOMAIN.split('_')[0])
-        except Exception:
-            return 3
+        return len(DOMAIN.split('_')[0])
 
     async def _async_update_data(self):
         """执行异步占验并进行因果审计."""
@@ -44,11 +45,30 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
 
         try:
             raw_data = await self.hass.async_add_executor_job(self.api.get_data)
-            if not raw_data or "responseData" not in raw_data:
-                reason = raw_data.get("headerInfos", {}).get("reason", "信号微弱")
-                raise UpdateFailed(f"格局显现虚象: {reason}")
-            biz_data = raw_data["responseData"].get("data", {})
+            if not raw_data:
+                raise UpdateFailed("接口返回空数据")
+
+            resp_data = raw_data.get("responseData") or {}
+            result_code = resp_data.get("resultCode")
+
+            # 登录失败响应（含 resultCode 字段）
+            if result_code is not None and result_code != "0000":
+                desc = resp_data.get("resultDesc") or raw_data.get("headerInfos", {}).get("reason", "")
+                # 鉴权类错误码 → 触发 reauth 流程
+                if result_code in ("3001", "1001", "COOLDOWN"):
+                    raise ConfigEntryAuthFailed(f"认证失败 ({result_code}): {desc}")
+                raise UpdateFailed(f"接口返回错误码 {result_code}: {desc}")
+
+            # 查询响应：提取业务数据
+            biz_data = resp_data.get("data") or {}
+            if not biz_data:
+                header_info = raw_data.get("headerInfos") or {}
+                raise UpdateFailed(
+                    f"查询失败: {header_info.get('reason', header_info.get('code', '未返回数据'))}"
+                )
             return self._process_data(biz_data)
+        except (UpdateFailed, ConfigEntryAuthFailed):
+            raise
         except Exception as err:
             raise UpdateFailed(f"占测波导异常: {err}")
 
@@ -65,6 +85,11 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
             return val
 
         def format_size(kb_val):
+            # 服务端可能直接返回"不限量"等文案
+            if isinstance(kb_val, str) and any(
+                kw in kb_val for kw in ("不限量", "无限", "unlimited", "不限")
+            ):
+                return "不限量"
             try:
                 kb = float(kb_val or 0)
                 if kb > 107374182400: return "不限量"
@@ -148,7 +173,7 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
             **account_attrs, 
             **flow_attrs, 
             **voice_attrs, 
-            "更新时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "更新时间": dt_now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
         return {
@@ -167,8 +192,8 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         return DeviceInfo(
             identifiers={(DOMAIN, self.api.device_id)},
             name=f"CTC Balance {masked_num}",
-            manufacturer="Carrier Service",
-            model="大六壬推演引擎",
+            manufacturer="CTC DLR.",
+            model="CTC Balance",
             entry_type=DeviceEntryType.SERVICE,
             sw_version=self.version
         )

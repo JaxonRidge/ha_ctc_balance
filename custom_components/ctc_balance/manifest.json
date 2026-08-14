@@ -7,6 +7,6 @@
     "documentation": "https://github.com/JaxonRidge/ha_ctc_balance",
     "iot_class": "cloud_polling",
     "issue_tracker": "https://github.com/JaxonRidge/ha_ctc_balance",
-    "requirements": ["pycryptodome>=3.10"],
-    "version": "1.0.10"
+    "requirements": ["pycryptodome>=3.23"],
+    "version": "1.0.11"
 }

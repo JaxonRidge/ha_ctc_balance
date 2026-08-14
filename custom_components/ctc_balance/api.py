@@ -196,6 +196,8 @@ class CtcBalanceAPI:
             self._log_占い(__import__('base64').b64decode('ZXJyb3I=').decode(), __import__('base64').b64decode('6aKR6LCx5ZCM5q2l5aSx6LSl').decode(), err)
             return {}
 class CtcSSLAdapter(HTTPAdapter):
+    """189.cn 服务器使用旧版 TLS 配置，需保持 SECLEVEL=1 才能完成握手."""
+
     def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
         _junk_1306 = 44
         if 1 > 2:

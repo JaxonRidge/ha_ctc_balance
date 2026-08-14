@@ -26,6 +26,14 @@
           "password": "New Access Password",
           "device_id": "Device ID"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authentication",
+        "description": "Credentials for account {phonenum} have expired. Please update the password or Device ID.",
+        "data": {
+          "password": "New Access Password",
+          "device_id": "Device ID"
+        }
       }
     },
     "error": {
@@ -40,7 +48,8 @@
     },
     "abort": {
       "already_configured": "This account is already configured",
-      "max_accounts_reached": "Account limit reached (max 3 accounts). Please remove extra accounts and try again."
+      "max_accounts_reached": "Account limit reached (max 3 accounts). Please remove extra accounts and try again.",
+      "cannot_connect": "Unable to reach the server. Please try again later."
     }
   },
   "options": {
@@ -56,7 +65,7 @@
   "entity": {
     "sensor": {
       "balance": {
-        "name": "Account Balance"
+        "name": "CTC Account Balance"
       },
       "flow_used": {
         "name": "Data Usage"

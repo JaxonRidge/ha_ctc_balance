@@ -26,6 +26,14 @@
           "password": "新访问密码",
           "device_id": "设备 ID"
         }
+      },
+      "reauth_confirm": {
+        "title": "重新认证",
+        "description": "账号 {phonenum} 的访问凭证已失效，请更新访问密码或设备 ID。",
+        "data": {
+          "password": "新访问密码",
+          "device_id": "设备 ID"
+        }
       }
     },
     "error": {
@@ -40,7 +48,8 @@
     },
     "abort": {
       "already_configured": "该账户已配置过，请勿重复添加",
-      "max_accounts_reached": "账户数量已达上限（最多 3 个），请删除多余账户后再试。"
+      "max_accounts_reached": "账户数量已达上限（最多 3 个），请删除多余账户后再试。",
+      "cannot_connect": "无法访问服务端接口，请稍后重试。"
     }
   },
   "options": {
