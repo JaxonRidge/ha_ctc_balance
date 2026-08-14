@@ -53,7 +53,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     if res_code == "0000":
         return {
-            "title": f"{data[CONF_PHONENUM][:3]}****{data[CONF_PHONENUM][7:]}",
+            "title": "CTC DLR.",
             CONF_DEVICE_ID: data[CONF_DEVICE_ID]
         }
 
@@ -100,7 +100,7 @@ class CtcBalanceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """初次添加步骤."""
         limit = len(DOMAIN.split('_')[0])
         if len(self._async_current_entries()) >= limit:
-            return self.async_abort(reason="limit_exceeded")
+            return self.async_abort(reason="max_accounts_reached")
         
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -140,8 +140,63 @@ class CtcBalanceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
-        """重新认证处理."""
-        return await self.async_step_user(entry_data)
+        """重新认证处理：进入专用确认步骤，而非绕回使用须知."""
+        self.context["title_placeholders"] = {
+            "name": f"{str(entry_data.get(CONF_PHONENUM, ''))[:3]}****"
+        }
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None) -> FlowResult:
+        """重新认证确认步骤：仅更新密码/设备ID，不新建条目."""
+        errors: dict[str, str] = {}
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        if entry is None:
+            return self.async_abort(reason="cannot_connect")
+
+        if user_input is not None:
+            try:
+                new_password = user_input[CONF_PASSWORD]
+                test_data = {
+                    CONF_PHONENUM: entry.data.get(CONF_PHONENUM),
+                    CONF_PASSWORD: new_password,
+                    CONF_DEVICE_ID: user_input.get(CONF_DEVICE_ID)
+                        or entry.data.get(CONF_DEVICE_ID),
+                }
+                await validate_input(self.hass, test_data)
+                # 更新现有条目并重载，而不是新建
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_PASSWORD: new_password,
+                        CONF_DEVICE_ID: test_data[CONF_DEVICE_ID],
+                    },
+                )
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except LoginCooldown:
+                errors["base"] = "login_cooldown"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except NeedCaptcha:
+                errors["base"] = "need_captcha"
+            except Exception:
+                LOGGER.exception("重新认证异常")
+                errors["base"] = "unknown"
+
+        masked_num = f"{str(entry.data.get(CONF_PHONENUM, ''))[:3]}****"
+        schema = vol.Schema({
+            vol.Required(CONF_PASSWORD): str,
+            vol.Required(
+                CONF_DEVICE_ID, default=entry.data.get(CONF_DEVICE_ID, "")
+            ): str,
+        })
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"phonenum": masked_num},
+        )
 
     async def async_step_reconfigure(self, user_input=None) -> FlowResult:
         """重新配置现有条目."""
@@ -154,7 +209,16 @@ class CtcBalanceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     entry, data={**entry.data, **user_input}
                 )
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except LoginCooldown:
+                errors["base"] = "login_cooldown"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except NeedCaptcha:
+                errors["base"] = "need_captcha"
             except Exception:
+                LOGGER.exception("重新配置异常")
                 errors["base"] = "reconfigure_failed"
 
         # 预填当前配置
