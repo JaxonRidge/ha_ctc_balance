@@ -1,8 +1,7 @@
 """CTC套餐余量数据协调器 - 大六壬推演引擎."""
 from __future__ import annotations
 
-import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,19 +10,31 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.util.dt import now as dt_now
 
-from .const import DOMAIN, LOGGER, CONF_SCAN_INTERVAL
+from .const import DOMAIN, LOGGER, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+from .ctc.const import CarrierAuthExpiredError
+from .storage import async_save_data
+
+def _tagged(src: dict, tag: str) -> dict:
+    """给来源域属性加前缀后并入聚合视图。"""
+    return {k if (tag in k or "名称" in k) else f"{tag}·{k}": v for k, v in src.items()}
 
 class CtcBalanceCoordinator(DataUpdateCoordinator):
     """管理数据异步占验与推演逻辑."""
 
-    def __init__(self, hass: HomeAssistant, api, version: str, entry: ConfigEntry):
-        """初始化推演协调器."""
-        self.api = api
+    def __init__(self, hass: HomeAssistant, client, version: str, entry: ConfigEntry):
+        """初始化推演引擎."""
+        self.client = client
         self.version = version
-        
-        # 获取推演周期设置
-        scan_interval_hours = int(entry.options.get(CONF_SCAN_INTERVAL, 6))
-        
+        # 获取推演周期设置（存储值为字符串，统一转 int；下限钳制为 6 小时防旧值过小）
+        try:
+            scan_interval_hours = int(
+                entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            )
+        except (TypeError, ValueError):
+            scan_interval_hours = int(DEFAULT_SCAN_INTERVAL)
+        scan_interval_hours = max(scan_interval_hours, 6)
+        self._scan_interval_seconds = scan_interval_hours * 3600
+
         super().__init__(
             hass,
             LOGGER,
@@ -34,166 +45,164 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
 
     def _get_gate_limit(self) -> int:
         """动态计算环境定力上限."""
-        return len(DOMAIN.split('_')[0])
+        return len(DOMAIN.split('_')[0]) + DOMAIN.count('a')
 
     async def _async_update_data(self):
         """执行异步占验并进行因果审计."""
         current_entries = self.hass.config_entries.async_entries(DOMAIN)
         if len(current_entries) > self._get_gate_limit():
             LOGGER.critical("因果失衡：环境定力不足以承载过多推演任务")
-            raise UpdateFailed("三才失衡，推演终止")
+            raise UpdateFailed("五行失衡，推演终止")
 
         try:
-            raw_data = await self.hass.async_add_executor_job(self.api.get_data)
-            if not raw_data:
-                raise UpdateFailed("接口返回空数据")
-
-            resp_data = raw_data.get("responseData") or {}
-            result_code = resp_data.get("resultCode")
-
-            # 登录失败响应（含 resultCode 字段）
-            if result_code is not None and result_code != "0000":
-                desc = resp_data.get("resultDesc") or raw_data.get("headerInfos", {}).get("reason", "")
-                # 鉴权类错误码 → 触发 reauth 流程
-                if result_code in ("3001", "1001", "COOLDOWN"):
-                    raise ConfigEntryAuthFailed(f"认证失败 ({result_code}): {desc}")
-                raise UpdateFailed(f"接口返回错误码 {result_code}: {desc}")
-
-            # 查询响应：提取业务数据
-            biz_data = resp_data.get("data") or {}
-            if not biz_data:
-                header_info = raw_data.get("headerInfos") or {}
-                raise UpdateFailed(
-                    f"查询失败: {header_info.get('reason', header_info.get('code', '未返回数据'))}"
-                )
-            return self._process_data(biz_data)
-        except (UpdateFailed, ConfigEntryAuthFailed):
-            raise
+            data = await self.hass.async_add_executor_job(self.client.fetch_all_data)
+        except CarrierAuthExpiredError as err:
+            # 凭证失效 → HA 自动调起 reauth 流程（密码登录可静默续期；
+            # 若设备被风控则由配置流转入短信激活）
+            raise ConfigEntryAuthFailed(str(err)) from err
         except Exception as err:
-            raise UpdateFailed(f"占测波导异常: {err}")
+            raise UpdateFailed(f"占测波导异常: {err}") from err
+
+        if not data:
+            raise UpdateFailed("接口返回空数据")
+        # 数据与最新登录态一起落盘（供重启后新鲜期内免请求灌注）
+        try:
+            await async_save_data(self.hass, self.client.phone, self.client, data)
+        except Exception as err:  # 落盘失败不影响本次数据可用性
+            LOGGER.debug("业务数据落盘失败（不影响本次刷新）: %s", err)
+        return self._process_data(data)
 
     def _process_data(self, data: dict) -> dict:
-        """核心类神映射与多属性包封装."""
-        def parse_to_kb(text):
-            if not text or not isinstance(text, (str, bytes)): return 0.0
-            match = re.search(r"([0-9.]+)\s*(GB|MB|KB|TB)", str(text), re.I)
-            if not match: return 0.0
-            val, unit = float(match.group(1)), match.group(2).upper()
-            if unit == "GB": return val * 1048576 # 1024*1024
-            if unit == "MB": return val * 1024
-            if unit == "TB": return val * 1073741824
-            return val
+        """核心类神映射与分域属性组装（对齐参考实现的分域组装模式）."""
+        data = data or {}
 
-        def format_size(kb_val):
-            # 服务端可能直接返回"不限量"等文案
-            if isinstance(kb_val, str) and any(
-                kw in kb_val for kw in ("不限量", "无限", "unlimited", "不限")
-            ):
-                return "不限量"
-            try:
-                kb = float(kb_val or 0)
-                if kb > 107374182400: return "不限量"
-                mb = kb / 1024
-                return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.2f} MB"
-            except: return "0 MB"
+        # 账户 / 余额域（queryPhoneBillBalance + queryIntegral）
+        balance = float(data.get("balance") or 0.0)
+        is_arrears = balance < 0
+        charge = float(data.get("charge") or 0.0)
+        integral = int(data.get("integral") or 0)
+        bills = data.get("history_bills") or {}
 
-        def to_float(val):
-            try:
-                if val is None: return 0.0
-                clean_val = str(val).replace("元", "").replace(",", "").strip()
-                return round(float(clean_val or 0), 2)
-            except: return 0.0
+        balance_attrs = {
+            "余额说明": data.get("balance_title") or "",
+            "当前状态": "欠费" if is_arrears else "正常",
+            "是否欠费": "是" if is_arrears else "否",
+            "欠费金额": f"{abs(balance):.2f} 元" if is_arrears else "0.00 元",
+            "当前可用话费": f"{balance:.2f} 元",
+            "通用余额": f"{data.get('balance_general') or '0.00'} 元",
+            "专用余额": data.get("balance_special") or "0.00元",
+            "本月消费": f"{charge:.2f} 元",
+            "号码积分": f"{integral} 分",
+            "近半年账单": {k: bills[k] for k in sorted(bills)},
+        }
 
-        if data is None: data = {}
-        f_info = data.get("flowInfo") or {}
-        f_list = f_info.get("flowList") or []
-        v_info = data.get("voiceInfo") or {}
-        v_data = v_info.get("voiceDataInfo") or {}
-        b_info = data.get("balanceInfo") or {}
-        b_data = b_info.get("indexBalanceDataInfo") or {}
-        bill = b_info.get("phoneBillRegion") or {}
-        if isinstance(bill, list) and len(bill) > 0: bill = bill[0]
-        s_info = data.get("storageInfo") or {}
-        s_data = s_info.get("storageDataInfo") or {}
-        list_used_kb = 0.0
-        list_bal_kb = 0.0
-        for item in f_list:
-            title = item.get("title", "")
-            if "流量" not in title: continue
-            if "已用" in item.get("leftTitle", ""):
-                list_used_kb += parse_to_kb(item.get("leftTitleHh"))
-            if "剩余" in item.get("rightTitle", ""):
-                list_bal_kb += parse_to_kb(item.get("rightTitleHh"))
-            elif "超出" in item.get("leftTitle", ""):
-                list_used_kb += parse_to_kb(item.get("leftTitleHh"))
-
-        tot_node = f_info.get("totalAmount") or {}
-        f_used_kb = list_used_kb if list_used_kb > 0 else float(tot_node.get("used") or 0)
-        f_bal_kb = list_bal_kb if list_bal_kb > 0 else float(tot_node.get("balance") or 0)
-        f_total_kb = f_used_kb + f_bal_kb
-        v_used = int(v_data.get("used") or 0)
-        v_total = int(v_data.get("total") or 0)
-        v_bal = int(v_data.get("balance") or 0)
-        bal_val = to_float(b_data.get("balance"))
-        arrear_val = to_float(b_data.get("arrear"))
-        final_bal = -arrear_val if (bal_val == 0 and arrear_val > 0) else bal_val
-
-        # 账户与存储属性包 (5项)
+        # 账户资产域（queryAccountInfo + XML 网关机主姓名）
+        fixed_lines = data.get("fixed_lines") or []
         account_attrs = {
-            "账户余额": f"{final_bal:.2f} 元",
-            "本月消费": f"{to_float(bill.get('subTitleHh')):.2f} 元",
-            "号码积分": f"{int((data.get('integralInfo') or {}).get('integral') or 0)} 分",
-            "云盘剩余": format_size(s_data.get("balance"))
+            "机主": data.get("account_name") or "用户",
+            "账户等级": data.get("user_level") or "普通用户",
+            "信用额度": f"{data.get('credit_limit') or '0'} 元",
+            "网龄": data.get("open_years") or "在网用户",
+            "名下固话号码": "、".join(fixed_lines) if fixed_lines else "暂无",
+            "账户状态": "欠费" if is_arrears else (data.get("account_status") or "正常"),
+            "归属地": data.get("location") or "属地未知",
         }
 
-        # 流量明细属性包 (10项)
+        # 流量域（userPackage + qryShareUsage：三量 + 逐成员/逐包展开）
+        flow_total = float(data.get("flow_total_gb") or 0.0)
+        flow_used = float(data.get("flow_used_gb") or 0.0)
+        flow_remain = float(data.get("flow_remain_gb") or 0.0)
+
         flow_attrs = {
-            "流量总量": format_size(f_total_kb),
-            "流量已用": format_size(f_used_kb),
-            "流量剩余": format_size(f_bal_kb),  
-            "流量超量": format_size(tot_node.get("over")),
-            "流量使用率": f"{round((f_used_kb / (f_total_kb or 1) * 100), 2)}%",
-            "通用总量": format_size(float((f_info.get("commonFlow") or {}).get("balance") or 0) + float((f_info.get("commonFlow") or {}).get("used") or 0)),
-            "通用已用": format_size((f_info.get("commonFlow") or {}).get("used")),
-            "通用超额": format_size((f_info.get("commonFlow") or {}).get("over")),
-            "专用总量": format_size(float((f_info.get("specialAmount") or {}).get("balance") or 0) + float((f_info.get("specialAmount") or {}).get("used") or 0)),
-            "专用已用": format_size((f_info.get("specialAmount") or {}).get("used")),
+            "流量总量": f"{flow_total:.2f} GB",
+            "流量剩余": f"{flow_remain:.2f} GB",
+            "流量已用": f"{flow_used:.2f} GB",
+            "流量使用率": f"{round(flow_used / flow_total * 100, 1)}%" if flow_total > 0 else "0%",
+            "剩余流量占比": f"{round(flow_remain / flow_total * 100, 1)}%" if flow_total > 0 else "0%",
+            "副卡": data.get("sub_cards") or [],
         }
+        for m in data.get("flow_members") or []:
+            flow_attrs[f"{m.get('label', '副卡')} ({m.get('phone', '')})"] = f"{m.get('used_gb', 0)} GB"
+        for idx, pkg in enumerate(data.get("detailed_flow_pkgs") or [], 1):
+            flow_attrs[f"流量包{idx}"] = pkg
 
-        # 语音明细属性包 (4项)
+        # 语音域（qryUserUsage + qryShareUsage：三量 + 逐包/逐成员展开）
+        voice_total = int(data.get("voice_total") or 0)
+        voice_used = int(data.get("voice_used") or 0)
+        voice_remain = int(data.get("voice_remain") or 0)
+
         voice_attrs = {
-            "语音总量": f"{v_total} 分钟",
-            "语音已用": f"{v_used} 分钟",
-            "语音剩余": f"{v_bal} 分钟",
-            "语音使用率": f"{round((v_used / (v_total or 1) * 100), 1)}%",
+            "套餐名称": data.get("package_name") or "5G畅享套餐",
+            "语音总量": f"{voice_total} 分钟",
+            "语音剩余": f"{voice_remain} 分钟",
+            "语音已用": f"{voice_used} 分钟",
+            "语音使用率": f"{round(voice_used / voice_total * 100, 1)}%" if voice_total > 0 else "0%",
+        }
+        for idx, pkg in enumerate(data.get("voice_packages") or [], 1):
+            voice_attrs[f"语音包{idx}"] = pkg
+        for m in data.get("voice_members") or []:
+            voice_attrs[f"{m.get('label', '副卡')} ({m.get('phone', '')})"] = f"{m.get('used_mins', 0)} 分钟"
+
+        # 宽带域（queryMyBroadBand）
+        broadbands = data.get("broadbands") or []
+        broadband_accounts = data.get("broadband_accounts") or []
+        broadband_attrs = {
+            "名下宽带数量": f"{len(broadbands)} 条",
+            "宽带列表": broadbands,
+            "归属地": data.get("location") or "",
+            **(data.get("broadband_info") or {}),
         }
 
-        # 封装全量 19 项推演指标
-        all_attrs = {
-            **account_attrs, 
-            **flow_attrs, 
-            **voice_attrs, 
-            "更新时间": dt_now().strftime("%Y-%m-%d %H:%M:%S")
-        }
+        # 实体主值：宽带=宽带账号（无括号及括号内明细，无宽带显式提示）；
+        # 账户资产=星级
+        broadband_val = "；".join(broadband_accounts) if broadband_accounts else "无宽带"
+        account_val = data.get("user_level") or "普通用户"
+
+        # 账户余量实体作为唯一对外聚合视图：并入数据用量（流量）与语音时长属性
+        balance_attrs.update(_tagged(flow_attrs, "流量"))
+        balance_attrs.update(_tagged(voice_attrs, "语音"))
+        balance_attrs["更新时间"] = dt_now().strftime("%Y-%m-%d %H:%M:%S")
 
         return {
-            "balance_val": final_bal,
-            "flow_raw": f_used_kb,
-            "voice_val": v_used,
-            "all_attrs": all_attrs,
+            "balance_val": balance,
+            "flow_used_gb": flow_used,
+            "voice_val": voice_used,
+            "broadband_val": broadband_val,
+            "account_val": account_val,
+            "balance_attrs": balance_attrs,
             "flow_attrs": flow_attrs,
             "voice_attrs": voice_attrs,
+            "broadband_attrs": broadband_attrs,
+            "account_attrs": account_attrs,
         }
-    
+
+    @property
+    def cache_max_age_seconds(self) -> int:
+        """缓存新鲜期上限 = 用户在前端选择的扫描间隔（秒）."""
+        return self._scan_interval_seconds
+
+    def hydrate_from_cache(self, raw: dict, data_ts: int) -> None:
+        """重启后用新鲜缓存灌注数据，本轮不触发网络请求。"""
+        self.data = self._process_data(raw)
+        self.last_update_success = True
+        self.last_update_success_time = datetime.fromtimestamp(data_ts, tz=timezone.utc)
+        remaining = self._scan_interval_seconds - (dt_now().timestamp() - data_ts)
+        # 临时收紧 update_interval 使本次调度落在剩余新鲜期内，调度后立即恢复
+        original_interval = self.update_interval
+        self.update_interval = timedelta(seconds=max(remaining, 60))
+        self._schedule_refresh()
+        self.update_interval = original_interval
+
     @property
     def device_info(self) -> DeviceInfo:
         """映射设备元数据."""
-        masked_num = f"{self.api.phonenum[:3]}****{self.api.phonenum[7:]}"
+        phone = self.client.phone
+        masked_num = f"{phone[:3]}****{phone[7:]}"
         return DeviceInfo(
-            identifiers={(DOMAIN, self.api.device_id)},
+            identifiers={(DOMAIN, self.client.uid)},
             name=f"CTC Balance {masked_num}",
             manufacturer="CTC DLR.",
-            model="CTC Balance",
+            model=self.client.device_model,
             entry_type=DeviceEntryType.SERVICE,
             sw_version=self.version
         )

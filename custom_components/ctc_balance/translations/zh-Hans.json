@@ -4,35 +4,39 @@
     "step": {
       "user": {
         "title": "使用须知",
-        "description": "### 下述信息请确认：\n1.已完整阅读并认可项目主页的 **免责申明**。\n2.已完整阅读并认可项目主页的 **使用须知**。\n3.已完整阅读 **详细配置与使用教程**。\n4.已通过 **短信火典** 获取 设备ID。",
+        "description": "### 下述信息请确认：\n1.已完整阅读并认可项目主页的 **免责申明**。\n2.已完整阅读并认可项目主页的 **使用须知**。\n3.已完整阅读 **详细配置与使用教程**。",
         "data": {
           "accept_terms": "我已确认上述信息，并愿自行承担推演因果"
         }
       },
       "account": {
         "title": "CTC 账户配置",
-        "description": "### 说明：\n- 请输入您的账户标识、访问密码以及设备 ID。\n- 系统将使用持久化凭证进行静默同步以确保稳定性。\n- 支持多账户配置，最多 3 个账户。\n- 多账户添加时有延迟，请耐心等待。",
+        "description": "### 说明：\n- 请输入您的账户标识、访问密码。\n- 本集成最多支持 5 个账户。\n- 多账户添加时存在延迟，请耐心等待。",
         "data": {
           "phonenum": "账户标识",
-          "password": "访问密码",
-          "device_id": "设备 ID"
+          "password": "访问密码"
         }
-      },      
+      },
+      "sms": {
+        "title": "短信验证激活设备",
+        "description": "已向账号 {phonenum} 下发短信验证码。请输入短信中的 6 位验证码以激活当前设备，随后将自动以密码登录完成配置。",
+        "data": {
+          "sms_code": "短信验证码"
+        }
+      },
       "reconfigure": {
         "title": "更新 CTC 访问凭证",
-        "description": "访问凭证已过期或连接断开，请更新您的访问密码或设备 ID。",
+        "description": "重新配置访问凭证（密码/账号）。当前设备 ID 已保存于持久化中，重新登录会直接复用、无需修改，可复制留存以备排查：\n\n`{device_id}`\n\n若触发安全校验，将转入短信验证以激活当前设备。",
         "data": {
           "phonenum": "账户标识",
-          "password": "新访问密码",
-          "device_id": "设备 ID"
+          "password": "新访问密码"
         }
       },
       "reauth_confirm": {
         "title": "重新认证",
-        "description": "账号 {phonenum} 的访问凭证已失效，请更新访问密码或设备 ID。",
+        "description": "账号 {phonenum} 的访问凭证已失效，请更新访问密码。当前设备 ID 已保存于持久化中，重新登录会直接复用、无需修改，可复制留存以备排查：\n\n`{device_id}`\n\n若触发安全校验，将转入短信验证以激活当前设备。",
         "data": {
-          "password": "新访问密码",
-          "device_id": "设备 ID"
+          "password": "新访问密码"
         }
       }
     },
@@ -40,15 +44,17 @@
       "terms_not_accepted": "请先确认使用须知",
       "invalid_phone_format": "账号格式错误（需 11 位数字）",
       "cannot_connect": "无法访问服务端接口或账号被临时限制",
-      "login_cooldown": "安全保护中：操作太频繁，请在 10 分钟后再试",
       "invalid_auth": "访问凭证错误，请检查密码或设备 ID",
-      "need_captcha": "安全校验触发！请先在移动端官方 App 中成功登录一次该账号，以解除风控限制。",
+      "need_captcha": "触发安全校验，将自动转入短信验证激活设备流程，请按提示完成短信验证。",
+      "sms_send_failed": "短信下发失败（含滑块兜底未成功），请稍后重试或更换网络环境。",
+      "sms_invalid_code": "短信验证码校验未通过，请确认短信中的 6 位验证码。",
+      "sms_verify_failed": "设备激活后仍无法通过安全校验，请重新发起短信验证。",
       "reconfigure_failed": "更新访问凭证失败，请检查密码或设备 ID",
       "unknown": "发生未知错误"
     },
     "abort": {
       "already_configured": "该账户已配置过，请勿重复添加",
-      "max_accounts_reached": "账户数量已达上限（最多 3 个），请删除多余账户后再试。",
+      "max_accounts_reached": "账户数量已达上限（最多 5 个），请删除多余账户后再试。",
       "cannot_connect": "无法访问服务端接口，请稍后重试。"
     }
   },
@@ -57,7 +63,8 @@
       "init": {
         "title": "同步选项设置",
         "data": {
-          "scan_interval": "数据同步频率"
+          "scan_interval": "数据同步频率",
+          "register_card": "启用自定义前端卡片支持（全局）"
         }
       }
     }
@@ -72,6 +79,12 @@
       },
       "voice_used": {
         "name": "语音时长"
+      },
+      "broadband": {
+        "name": "宽带信息"
+      },
+      "account": {
+        "name": "账户信息"
       }
     }
   }
