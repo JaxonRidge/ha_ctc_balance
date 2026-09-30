@@ -166,7 +166,8 @@ class LiuRenClientBase:
             code_str in _AUTH_EXPIRED_CODES
             or any(k in reason_str.lower() for k in _AUTH_EXPIRED_KEYWORDS)
         ):
-            LOGGER.warning("接口返回登录态失效: code=%s, reason=%s", code_str, reason_str)
+            # 预期路径：凭据到期由协调器静默续期兜底，故只记 debug。
+            LOGGER.debug("接口返回登录态失效: code=%s, reason=%s", code_str, reason_str)
             raise CarrierAuthExpiredError(f"推演凭据已失效 ({code_str}: {reason_str})")
         return hdr, res.get("responseData") or {}
 
@@ -196,7 +197,7 @@ class SliderMixin:
             }
             j = self._login_post("verificationSliderPicture", vp)
             sign = (j.get("data") or {}).get("signSignatureString")
-            LOGGER.info("滑块校验响应: %s, sign=%s", j, sign)
+            LOGGER.debug("滑块校验响应: %s, sign=%s", j, sign)
             if sign:
                 return sign
             time.sleep(0.5)
