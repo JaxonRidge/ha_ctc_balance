@@ -14,6 +14,7 @@ from homeassistant.components import frontend
 from .ctc import LiuRenClient
 from .coordinator import CtcBalanceCoordinator
 from .const import (
+    CACHE_SCHEMA,
     DOMAIN,
     CONF_PHONENUM,
     CONF_REGISTER_CARD,
@@ -86,12 +87,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: CtcBalanceConfigEntry) -
         await asyncio.sleep(jitter)
     # 初始化数据协调器
     coordinator = CtcBalanceCoordinator(hass, client, version, entry)
-    # 数据缓存仍在扫描间隔新鲜期内 → 直接灌注上线，重启不触发网络请求
+    # 数据缓存仍在扫描间隔新鲜期内且结构版本一致 → 直接灌注上线，重启不触发网络请求
     cached = await async_load_data(hass, phonenum)
-    if cached and (time.time() - cached["data_ts"]) < coordinator.cache_max_age_seconds:
+    if (
+        cached
+        and cached["data"].get("_schema") == CACHE_SCHEMA
+        and (time.time() - cached["data_ts"]) < coordinator.cache_max_age_seconds
+    ):
         age = int(time.time() - cached["data_ts"])
         coordinator.hydrate_from_cache(cached["data"], cached["data_ts"])
-        LOGGER.info("账号 %s 使用 %d 秒前的数据缓存上线，本轮不请求接口",
+        LOGGER.debug("账号 %s 使用 %d 秒前的数据缓存上线，本轮不请求接口",
                     phonenum[:3] + "****", age)
     else:
         await coordinator.async_config_entry_first_refresh()
@@ -104,7 +109,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CtcBalanceConfigEntry) -
 
 async def async_reload_entry(hass: HomeAssistant, entry: CtcBalanceConfigEntry) -> None:
     """配置变动处理."""
-    LOGGER.info("配置已更新，正在重载集成")
+    LOGGER.debug("配置已更新，正在重载集成")
     await hass.config_entries.async_reload(entry.entry_id)
 
 async def async_unload_entry(hass: HomeAssistant, entry: CtcBalanceConfigEntry) -> bool:
@@ -119,6 +124,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     phonenum = entry.data.get(CONF_PHONENUM)
     if phonenum:
         await async_clear_auth(hass, phonenum)
-        LOGGER.info("账号 %s 的本地缓存已清理", phonenum[:3] + "****")
+        LOGGER.debug("账号 %s 的本地缓存已清理", phonenum[:3] + "****")
     # 条目已移除 → 若无任何条目开启卡片注册则移除注入
     await _sync_card_registration(hass)

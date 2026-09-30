@@ -10,7 +10,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.util.dt import now as dt_now
 
-from .const import DOMAIN, LOGGER, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+from .const import (
+    DOMAIN,
+    LOGGER,
+    CONF_DEVICE_ID,
+    CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+)
 from .ctc.const import CarrierAuthExpiredError
 from .storage import async_save_data
 
@@ -57,9 +64,17 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         try:
             data = await self.hass.async_add_executor_job(self.client.fetch_all_data)
         except CarrierAuthExpiredError as err:
-            # 凭证失效 → HA 自动调起 reauth 流程（密码登录可静默续期；
-            # 若设备被风控则由配置流转入短信激活）
-            raise ConfigEntryAuthFailed(str(err)) from err
+            # token 在轮询间隔内自然失效属常态：先用持久化的密码+设备ID 静默续期，
+            # 成功即重试一次；仅当续期也失败（设备被风控、须短信激活）才请求用户重新认证。
+            LOGGER.debug("推演凭据失效，尝试以密码+设备ID 静默续期: %s", err)
+            if not await self._async_relogin():
+                raise ConfigEntryAuthFailed(str(err)) from err
+            try:
+                data = await self.hass.async_add_executor_job(self.client.fetch_all_data)
+            except CarrierAuthExpiredError as retry_err:
+                raise ConfigEntryAuthFailed(str(retry_err)) from retry_err
+            except Exception as retry_err:
+                raise UpdateFailed(f"占测波导异常: {retry_err}") from retry_err
         except Exception as err:
             raise UpdateFailed(f"占测波导异常: {err}") from err
 
@@ -72,6 +87,29 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
             LOGGER.debug("业务数据落盘失败（不影响本次刷新）: %s", err)
         return self._process_data(data)
 
+    async def _async_relogin(self) -> bool:
+        """静默续期"""
+        if self.config_entry is None:
+            return False
+        entry_data = self.config_entry.data or {}
+        password = entry_data.get(CONF_PASSWORD)
+        device_id = entry_data.get(CONF_DEVICE_ID)
+        if not (password and device_id):
+            return False
+        try:
+            result = await self.hass.async_add_executor_job(
+                self.client.login_with_password, password, device_id
+            )
+        except Exception as err:
+            LOGGER.warning("静默续期登录异常: %s", err)
+            return False
+        if str(result.get("resultCode")) == "0000" and self.client.token:
+            LOGGER.debug("静默续期成功，已载入新 token")
+            return True
+        LOGGER.warning("静默续期未成功: code=%s desc=%s",
+                       result.get("resultCode"), result.get("resultDesc"))
+        return False
+
     def _process_data(self, data: dict) -> dict:
         """核心类神映射与分域属性组装（对齐参考实现的分域组装模式）."""
         data = data or {}
@@ -81,7 +119,7 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         is_arrears = balance < 0
         charge = float(data.get("charge") or 0.0)
         integral = int(data.get("integral") or 0)
-        bills = data.get("history_bills") or {}
+        bills = data.get("history_bills") or []
 
         balance_attrs = {
             "余额说明": data.get("balance_title") or "",
@@ -90,21 +128,30 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
             "欠费金额": f"{abs(balance):.2f} 元" if is_arrears else "0.00 元",
             "当前可用话费": f"{balance:.2f} 元",
             "通用余额": f"{data.get('balance_general') or '0.00'} 元",
-            "专用余额": data.get("balance_special") or "0.00元",
+            "专用余额": f"{data.get('balance_special') or '0.00'} 元",
             "本月消费": f"{charge:.2f} 元",
+            # 余额提醒：上游标红（余额不足以抵扣下期账单）时展示其原文提示，否则「无」。
+            # 与「是否欠费」相互独立——余额为正也可能有提醒。
+            "余额提醒": (
+                data.get("balance_warn_tip") or "余额不足以抵扣下期账单"
+            ) if data.get("balance_warn") else "无",
             "号码积分": f"{integral} 分",
-            "近半年账单": {k: bills[k] for k in sorted(bills)},
+            "近半年账单": {
+                f"{b.get('title', '')}出账": f"{b.get('amount', '')} 元"
+                for b in sorted(bills, key=lambda b: str(b.get("title", "")))
+            },
         }
 
         # 账户资产域（queryAccountInfo + XML 网关机主姓名）
         fixed_lines = data.get("fixed_lines") or []
         account_attrs = {
             "机主": data.get("account_name") or "用户",
+            "主套餐": data.get("package_name") or "5G畅享套餐",
             "账户等级": data.get("user_level") or "普通用户",
             "信用额度": f"{data.get('credit_limit') or '0'} 元",
             "网龄": data.get("open_years") or "在网用户",
             "名下固话号码": "、".join(fixed_lines) if fixed_lines else "暂无",
-            "账户状态": "欠费" if is_arrears else (data.get("account_status") or "正常"),
+            "账户状态": "欠费" if is_arrears else "正常",
             "归属地": data.get("location") or "属地未知",
         }
 
@@ -113,18 +160,32 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         flow_used = float(data.get("flow_used_gb") or 0.0)
         flow_remain = float(data.get("flow_remain_gb") or 0.0)
 
+        flow_members = data.get("flow_members") or []
         flow_attrs = {
             "流量总量": f"{flow_total:.2f} GB",
             "流量剩余": f"{flow_remain:.2f} GB",
             "流量已用": f"{flow_used:.2f} GB",
             "流量使用率": f"{round(flow_used / flow_total * 100, 1)}%" if flow_total > 0 else "0%",
             "剩余流量占比": f"{round(flow_remain / flow_total * 100, 1)}%" if flow_total > 0 else "0%",
-            "副卡": data.get("sub_cards") or [],
+            "副卡": [m.get("phone", "") for m in flow_members if not m.get("is_self")],
         }
-        for m in data.get("flow_members") or []:
-            flow_attrs[f"{m.get('label', '副卡')} ({m.get('phone', '')})"] = f"{m.get('used_gb', 0)} GB"
-        for idx, pkg in enumerate(data.get("detailed_flow_pkgs") or [], 1):
-            flow_attrs[f"流量包{idx}"] = pkg
+        for m in flow_members:
+            label = "本机" if m.get("is_self") else "副卡"
+            flow_attrs[f"{label} ({m.get('phone', '')})"] = f"{m.get('used_gb', 0)} GB"
+        for idx, pkg in enumerate(data.get("flow_packages") or [], 1):
+            # 分类标注：判据来自 service 层的结构化标记（has_quota / is_transfer）。
+            # 后端只给标记，不作展示派生——「超出」条的已用量由卡片自行聚合（超出进度条）。
+            if not pkg.get("has_quota", True):
+                # 无独立额度（达量计费的基础资费档）：上游侧只给已用，不展示 0 总额
+                tag = "[超出]"
+                detail = f"已用 {pkg.get('used_gb', 0)} GB"
+            else:
+                tag = "[转存]" if pkg.get("is_transfer") else ""
+                detail = (
+                    f"剩余 {pkg.get('remain_gb', 0)} GB"
+                    f" | 已用 {pkg.get('used_gb', 0)} GB | 共 {pkg.get('total_gb', 0)} GB"
+                )
+            flow_attrs[f"流量包{idx}"] = f"{tag}{pkg.get('name', '')}: {detail}"
 
         # 语音域（qryUserUsage + qryShareUsage：三量 + 逐包/逐成员展开）
         voice_total = int(data.get("voice_total") or 0)
@@ -132,30 +193,45 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         voice_remain = int(data.get("voice_remain") or 0)
 
         voice_attrs = {
-            "套餐名称": data.get("package_name") or "5G畅享套餐",
             "语音总量": f"{voice_total} 分钟",
             "语音剩余": f"{voice_remain} 分钟",
             "语音已用": f"{voice_used} 分钟",
             "语音使用率": f"{round(voice_used / voice_total * 100, 1)}%" if voice_total > 0 else "0%",
         }
         for idx, pkg in enumerate(data.get("voice_packages") or [], 1):
-            voice_attrs[f"语音包{idx}"] = pkg
+            voice_attrs[f"语音包{idx}"] = (
+                f"{pkg.get('title', '')}: 已用 {pkg.get('used', '')}"
+                f" | 剩余 {pkg.get('remain', '')} | {pkg.get('total', '')}"
+            )
         for m in data.get("voice_members") or []:
-            voice_attrs[f"{m.get('label', '副卡')} ({m.get('phone', '')})"] = f"{m.get('used_mins', 0)} 分钟"
+            label = "本机" if m.get("is_self") else "副卡"
+            voice_attrs[f"{label} ({m.get('phone', '')})"] = f"{m.get('used_mins', 0)} 分钟"
 
         # 宽带域（queryMyBroadBand）
         broadbands = data.get("broadbands") or []
-        broadband_accounts = data.get("broadband_accounts") or []
         broadband_attrs = {
             "名下宽带数量": f"{len(broadbands)} 条",
-            "宽带列表": broadbands,
+            "宽带列表": [
+                f"{b.get('account', '')} ({b.get('product_name', '')} {b.get('rate', '')})"
+                for b in broadbands
+            ],
             "归属地": data.get("location") or "",
-            **(data.get("broadband_info") or {}),
         }
+        if broadbands:
+            b0 = broadbands[0]
+            broadband_attrs.update({
+                "宽带账号": b0.get("account", ""),
+                "产品名称": b0.get("product_name", ""),
+                "签约速率": b0.get("rate", ""),
+                "开通时间": b0.get("start_date", ""),
+                "到期时间": b0.get("end_date", ""),
+                "剩余有效天数": f"{b0.get('remaining_days', 0)} 天",
+                "装机地址": b0.get("address", ""),
+            })
 
         # 实体主值：宽带=宽带账号（无括号及括号内明细，无宽带显式提示）；
         # 账户资产=星级
-        broadband_val = "；".join(broadband_accounts) if broadband_accounts else "无宽带"
+        broadband_val = "；".join(b.get("account", "") for b in broadbands) if broadbands else "无宽带"
         account_val = data.get("user_level") or "普通用户"
 
         # 账户余量实体作为唯一对外聚合视图：并入数据用量（流量）与语音时长属性

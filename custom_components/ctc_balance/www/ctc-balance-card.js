@@ -1,5 +1,5 @@
 (async () => {
-  const CARD_VERSION = "v1.1.6";
+  const CARD_VERSION = "v1.1.9";
   console.log(
     `%cCTC Balance Card ${CARD_VERSION}`,
      "color: #000000ff; font-weight: bold; background: rgba(0,0,0,0.2); padding:3px 8px; border-radius:6px; backdrop-filter: blur(2px);"
@@ -28,6 +28,22 @@
     _attr(e,k) { return e?.attributes?.[k] ?? "--"; }
     _num(e,k) { const v = parseFloat(this._attr(e,k)); return isFinite(v) ? v : null; }
 
+    // 超出流量视图：扫「超出」类流量包累加已用量（= 超出套餐部分），再除以流量总量求占比——
+    _over_view(e) {
+      const a = (e && e.attributes) || {};
+      let used = 0;
+      for (const k of Object.keys(a)) {
+        if (!/^流量包/.test(k)) continue;
+        const s = a[k] == null ? "" : String(a[k]);
+        if (!s.includes("超出")) continue;
+        const m = s.match(/已用\s*([\d.]+)\s*GB/);
+        if (m) used += parseFloat(m[1]) || 0;
+      }
+      const total = this._num(e, "流量总量");
+      if (!(used > 0) || !(total > 0)) return null;
+      return { rate: Math.round(used / total * 1000) / 10, value: `${used.toFixed(2)} GB` };
+    }
+
     v1_metric(label, value, icon, danger, e) {
       return html`
         <div class="v1-metric-box ${danger?"danger":""}" @click=${()=>this._info(e.entity_id)}>
@@ -37,21 +53,30 @@
         </div>`;
     }
 
-    v1_bar(label, rate, remain, total) {
+    // 流量/语音进度条。
+    v1_bar(label, rate, remain, total, ov) {
       if (rate == null) return html``;
       const cls = rate>=90 ? "danger" : rate>=80 ? "warn" : "";
       return html`
-        <div class="v1-meter-container ${cls}">
-          <div class="m-top"><span>${label}</span><b>${rate}%</b></div>
+        <div class="v1-meter-container ${cls}${ov ? " has-over" : ""}">
+          <div class="m-top">
+            <span>${label}</span>
+            <b><em class="main">${rate}%</em>${ov ? html`<em class="sep">/</em><em class="over">${ov.rate}%</em>` : ""}</b>
+          </div>
           <div class="bar-bg"><div class="fill" style="width:${rate}%"></div></div>
-          <div class="m-btm"><span>剩余 ${remain}</span><span>总量 ${total}</span></div>
+          ${ov ? html`<div class="bar-bg over"><div class="fill" style="width:${ov.rate}%"></div></div>` : ""}
+          <div class="m-btm">
+            ${ov
+              ? html`<span>剩余 ${remain}<em class="sep">/</em><em class="over">超出 ${ov.value}</em></span>`
+              : html`<span>剩余 ${remain}</span><span>总量 ${total}</span>`}
+          </div>
         </div>`;
     }
 
     v1_group(title, e, items) {
       const rows = items.map(it => html`
-        <div class="row" @click=${()=>this._info(e.entity_id)}>
-          <span>${it.name}</span><b>${it.value}</b>
+        <div class="row ${it.tagKind||""}" @click=${()=>this._info(e.entity_id)}>
+          <span>${it.tag ? html`<em class="pkg-tag ${it.tagKind||""}">${it.tag}</em>` : ""}${it.name}</span><b class="${it.tagKind||""}">${it.value}</b>
         </div>`);
 
       return rows.length ? html`
@@ -92,7 +117,7 @@
             ${this.v1_metric("号码积分", a["号码积分"], "mdi:star-circle-outline", false, e)}
           </div>
 
-          ${this.v1_bar("流量使用", this._num(e,"流量使用率"), a["流量剩余"], a["流量总量"])}
+          ${this.v1_bar("流量使用", this._num(e,"流量使用率"), a["流量剩余"], a["流量总量"], this._over_view(e))}
           ${this.v1_bar("语音通话", this._num(e,"语音使用率"), a["语音剩余"], a["语音总量"])}
 
           ${this.config.more_info ? html`
@@ -120,15 +145,21 @@
         </div>`;
     }
 
-    v2_progress(label, rate, remain, total) {
+    // 同 v1_bar：超出条并入同一 meter（上正常条 + 下红条），百分比与数值行合并显示
+    v2_progress(label, rate, remain, total, ov) {
       if (rate == null) return html``;
       return html`
-        <div class="meter ${this.v2_level(rate)}">
-          <div class="meter-top"><span>${label}</span><span>${rate}%</span></div>
+        <div class="meter ${this.v2_level(rate)}${ov ? " has-over" : ""}">
+          <div class="meter-top">
+            <span>${label}</span>
+            <span><em class="main">${rate}%</em>${ov ? html`<em class="sep">/</em><em class="over">${ov.rate}%</em>` : ""}</span>
+          </div>
           <div class="bar"><div class="fill" style="--value:${rate}%"></div></div>
+          ${ov ? html`<div class="bar over"><div class="fill" style="--value:${ov.rate}%"></div></div>` : ""}
           <div class="meter-detail">
-            <span>剩余 ${remain}</span>
-            <span>总量 ${total}</span>
+            ${ov
+              ? html`<span>剩余 ${remain}<em class="sep">/</em><em class="over">超出 ${ov.value}</em></span>`
+              : html`<span>剩余 ${remain}</span><span>总量 ${total}</span>`}
           </div>
         </div>`;
     }
@@ -171,6 +202,21 @@
       return vals.join("/") + (unit && same ? " " + unit : "");
     }
 
+    // 标签 -> 配色类别（兼容旧文案「超出套餐流量」；未知标签不着色）
+    _tag_kind(tags) {
+      if (tags.some(t => t.includes("超出"))) return "over";
+      if (tags.some(t => t.includes("转存") || t.includes("结转"))) return "transfer";
+      return "";
+    }
+
+    // 类别 -> 条目名：超出/转存类的包名（基础套餐名、重名流量包）对用户无信息量，
+    // 直接用类别名做条目名，只保留「已用」等关键数值，避免长标题把数值挤到堆叠。
+    _tag_label(kind) {
+      if (kind === "over") return "超出套餐流量";
+      if (kind === "transfer") return "转存流量";
+      return "";
+    }
+
     // 明细数据清洗：原始属性 -> {name, value} 展示条目
     _detail_items(e, fixed, prefixes) {
       const a = (e && e.attributes) || {};
@@ -185,11 +231,21 @@
         // 流量包/语音包 -> 简化包名 + "剩余/已用/总共" 三段式
         if (/^(流量包|语音包)/.test(k) && s.includes(":")) {
           const i = s.indexOf(":");
-          let name = this._short_name(s.slice(0, i));
-          seen[name] = (seen[name] || 0) + 1;
-          if (seen[name] > 1) name = `${name}·${seen[name]}`;
+          let head = s.slice(0, i).trim();
+          const tags = [];
+          head = head.replace(/\[([^\]]+)\]/g, (_, t) => { tags.push(t); return ""; }).trim();
+          const kind = this._tag_kind(tags);
+          let name = "";
+          let tag = "";
+          if (kind) {
+            tag = this._tag_label(kind);
+          } else {
+            name = this._short_name(head);
+            seen[name] = (seen[name] || 0) + 1;
+            if (seen[name] > 1) name = `${name}·${seen[name]}`;
+          }
           const val = this._pkg_value(s.slice(i + 1)) || s.slice(i + 1).trim();
-          items.push({ name, value: val });
+          items.push({ name, value: val, tag, tagKind: kind });
           continue;
         }
         seen[k] = (seen[k] || 0) + 1;
@@ -206,9 +262,9 @@
           <div class="attr-title">${title}</div>
           <div class="attr-grid cols-${cols}">
             ${items.map(it => html`
-              <div class="attr-row" @click=${()=>this._info(e.entity_id)}>
-                <div class="attr-name">${it.name}</div>
-                <div class="attr-value">${it.value}</div>
+              <div class="attr-row ${it.tagKind||""}" @click=${()=>this._info(e.entity_id)}>
+                <div class="attr-name">${it.tag ? html`<em class="pkg-tag ${it.tagKind||""}">${it.tag}</em>` : ""}${it.name}</div>
+                <div class="attr-value ${it.tagKind||""}">${it.value}</div>
               </div>`)}
           </div>
         </div>`;
@@ -234,7 +290,7 @@
             ${this.v2_metric("号码积分", a["号码积分"], "mdi:star-circle-outline", false, e)}
           </div>
 
-          ${this.v2_progress("流量使用", this._num(e,"流量使用率"), a["流量剩余"], a["流量总量"])}
+          ${this.v2_progress("流量使用", this._num(e,"流量使用率"), a["流量剩余"], a["流量总量"], this._over_view(e))}
           ${this.v2_progress("语音通话", this._num(e,"语音使用率"), a["语音剩余"], a["语音总量"])}
 
           ${this.config.more_info ? (() => {
@@ -276,7 +332,7 @@
     }
 
     static styles = css`
-      .v1-card { --c-blue:var(--primary-color,#fff); --c-sky:#00a3e0; --c-red:#ef4444; --c-orange:#f59e0b;
+      .v1-card { --c-blue:var(--primary-color,#fff); --c-sky:#00a3e0; --c-red:#ef4444; --c-orange:#f59e0b; --ctm-red:#e60012; --ctm-orange:#f59e0b;
         padding:16px; color:var(--primary-text-color); }
       .v1-card .header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; }
       .v1-card .title { font-size:20px; font-weight:700; letter-spacing:-0.5px; }
@@ -298,16 +354,40 @@
       .v1-meter-container .bar-bg { height:8px; background:var(--secondary-background-color); border-radius:4px; overflow:hidden; }
       .v1-meter-container .fill { height:100%; border-radius:4px; background:linear-gradient(90deg,var(--c-blue),var(--c-sky)); transition:width 1s cubic-bezier(.4,0,.2,1); }
       .v1-meter-container.warn .fill { background:var(--c-orange); }
-      .v1-meter-container.warn .m-top b { color:var(--c-orange); }
+      .v1-meter-container.warn .m-top em.main { color:var(--c-orange); }
       .v1-meter-container.danger .fill { background:var(--c-red); }
-      .v1-meter-container.danger .m-top b { color:var(--c-red); }
+      .v1-meter-container.danger .m-top em.main { color:var(--c-red); }
+      /* 合并形态：红条与正常条在**同一容器**内上下并行（上正常、下超出，间距 4px），不另起一块 */
+      .v1-meter-container .bar-bg + .bar-bg { margin-top:4px; }
+      .v1-meter-container .bar-bg.over .fill { background:var(--ctm-red); }
+      .v1-meter-container .m-top em, .v1-meter-container .m-btm em { font-style:normal; }
+      .v1-meter-container .m-top em.sep { color:var(--secondary-text-color); font-weight:400; margin:0 4px; }
+      .v1-meter-container .m-top em.over { color:var(--ctm-red); }
+      .v1-meter-container .m-btm em.sep { color:var(--secondary-text-color); margin:0 4px; }
+      .v1-meter-container .m-btm em.over { color:var(--ctm-red); }
       .v1-meter-container .m-btm { display:flex; justify-content:space-between; font-size:10.5px; color:var(--secondary-text-color); margin-top:10px; opacity:.8; }
       .g-title { font-size:14px; font-weight:700; color:var(--c-blue); margin:16px 0 10px; padding-left:4px; border-left:3px solid var(--c-blue); }
-      .g-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+      /* 明细网格：宽卡**最多两列**，容器（= 卡片实宽）不足两列时自动落单列。
+         下限用 max(160px, (100%-gap)/2)：容器够宽时下限=半宽 ⇒ 只会排两列、不会越排越多；
+         容器 <330px 时下限回落到 160px ⇒ 两列放不下（160*2+10=330）→ 自动单列。
+         目的：窄卡里 6 字类别标签不再被挤成竖排（实测阈值 ≈ 卡宽 362px）。 */
+      .g-grid { display:grid; gap:10px;
+        grid-template-columns:repeat(auto-fit,minmax(max(160px,calc((100% - 10px) / 2)),1fr)); }
+      /* 名称可收缩换行、数值永不拆行（避免 "已用 15.1 / 7 GB" 这类中间断行） */
       .row { padding:10px 12px; background:var(--secondary-background-color); border-radius:8px; font-size:12px;
-        display:flex; justify-content:space-between; gap:8px; cursor:pointer; min-width:0; }
-      .row span { flex-shrink:0; }
-      .row b { color:var(--primary-text-color); word-break:break-all; text-align:right; }
+        display:flex; justify-content:space-between; align-items:baseline; gap:8px; cursor:pointer; min-width:0; }
+      .row span { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+      .row b { flex:0 0 auto; white-space:nowrap; color:var(--primary-text-color); text-align:right; }
+      .row.over { background:rgba(230,0,18,.08); }
+      .row b.over { color:var(--ctm-red); }
+      /* 转存条目：行底色与数值色都用默认（不加橙底、数值不着橙），只在标签底块上着橙 */
+      /* 类别标签：超出=浅红底块+红字；转存=浅橙底块+橙字（只用文字色/底色块，不描边）。
+         标签文字**允许自行折行**（与语音明细的长包名同一策略，见 .row span 的 overflow-wrap）：
+         两列单格宽放不下 6 字标签 + 数值，折行后标签留在左、数值仍在右，同一水平行；不跨整行。 */
+      .pkg-tag { font-style:normal; font-weight:600; font-size:10.5px; line-height:1.45; padding:2px 6px; border-radius:4px;
+        margin-right:0; background:transparent; color:var(--ctm-orange); }
+      .pkg-tag.over { background:rgba(230,0,18,.12); color:var(--ctm-red); }
+      .pkg-tag.transfer { background:rgba(245,158,11,.20); color:var(--ctm-orange); }
       .footer { margin-top:24px; padding-top:16px; border-top:1px solid var(--divider-color);
         text-align:center; font-size:11px; color:var(--secondary-text-color); opacity:.8; }
 
@@ -329,6 +409,14 @@
       .fill { height:100%; width:var(--value); background:linear-gradient(90deg,var(--c-blue),var(--ctm-sky)); transition:width .8s cubic-bezier(.4,0,.2,1); }
       .meter.warn .fill { background:var(--ctm-orange); }
       .meter.danger .fill { background:var(--ctm-red); }
+      /* 合并形态：红条与正常条同一 meter 上下并行（上正常、下超出，间距 4px） */
+      .meter .bar + .bar { margin-top:4px; }
+      .meter .bar.over .fill { background:var(--ctm-red); }
+      .meter-top em, .meter-detail em { font-style:normal; }
+      .meter-top em.sep { color:var(--secondary-text-color); font-weight:400; margin:0 4px; }
+      .meter-top em.over { color:var(--ctm-red); }
+      .meter-detail em.sep { color:var(--secondary-text-color); margin:0 4px; }
+      .meter-detail em.over { color:var(--ctm-red); opacity:1; }
       .meter-detail { display:flex; justify-content:space-between; margin-top:10px; font-size:11px;
         font-weight:400; color:var(--secondary-text-color); opacity:.85; }
       .attr-group { margin-top:16px; }
@@ -336,9 +424,14 @@
       .attr-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
       .attr-grid.cols-3 { grid-template-columns:repeat(3,1fr); }
       .attr-row { padding:8px; border-radius:8px; background:rgba(0,163,224,.12); cursor:pointer; min-width:0; }
+      .attr-row.over { background:rgba(230,0,18,.10); }
+      /* 转存条目：格底色与数值色都用默认（不加橙底、数值不着橙），只在标签底块上着橙 */
       .attr-name { font-size:12px; color:var(--secondary-text-color); word-break:break-all; line-height:1.3;
         display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-      .attr-value { font-size:12.5px; font-weight:600; margin-top:4px; word-break:break-all; line-height:1.4; }
+      /* 数值永不拆行（避免 "已用 15.1 / 7 GB" 这类中间断行）；极端超长才省略 */
+      .attr-value { font-size:12.5px; font-weight:600; margin-top:4px; white-space:nowrap;
+        overflow:hidden; text-overflow:ellipsis; line-height:1.4; }
+      .attr-value.over { color:var(--ctm-red); }
     `;
     static getConfigElement() { return document.createElement("ctc-balance-card-editor"); }
     static getStubConfig(hass) { const auto = Object.keys(hass.states).find(e => e.startsWith("sensor.ctc_balance_") && e.endsWith("_balance"));
