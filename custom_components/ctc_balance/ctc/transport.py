@@ -29,7 +29,7 @@ from .const import (
     locate_notch,
 )
 
-from ..const import LOGGER
+from ..const import LOGGER, DEVICE_ID_PREFIX
 
 # 登录态失效判定：接口码 + reason 关键词双通道
 _AUTH_EXPIRED_CODES = ("1001", "2001", "9999", "X201", "X110")
@@ -52,7 +52,7 @@ class LiuRenClientBase:
     def __init__(self, phone: str, auth_data: dict = None, device_model: str = None):
         self.phone = phone
         self._session: requests.Session | None = None
-        self.uid = hashlib.md5(f"CT_IOS_11_{self.phone}".encode()).hexdigest()
+        self.uid = hashlib.md5(f"{DEVICE_ID_PREFIX}{self.phone}".encode()).hexdigest()
         self.token = None
         self.user_id = ""
         self.province_code = "600204"

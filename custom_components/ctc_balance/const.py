@@ -25,5 +25,5 @@ DEVICE_ID_PREFIX = "CT_IOS_11_"
 CACHE_SCHEMA = 6
 
 def gen_device_id(phonenum: str) -> str:
-    """未填写第三方 androidId 时的确定性自造设备标识（按账号稳定）."""
+    """设备标识."""
     return hashlib.md5(f"{DEVICE_ID_PREFIX}{phonenum}".encode()).hexdigest()

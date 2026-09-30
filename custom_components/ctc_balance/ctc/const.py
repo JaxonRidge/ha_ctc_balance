@@ -46,19 +46,25 @@ SCENE_LOGIN_SMS = "55"    # 登录短信验证码下发（getLoginRandomCode）
 SCENE_SLIDER = "1"        # 滑块验证
 
 # 设备机型
-DEFAULT_DEVICE_MODEL = "iPhone 18 Pro Max"
-DEVICE_MODELS = [
-    "iPhone 18 Pro Max",
-    "iPhone 18 Pro",
-    "iPhone 18",
-    "iPhone 17 Pro Max",
-    "iPhone 17 Pro",
+DEFAULT_DEVICE_MODEL = "iPhone 16 Pro"
+DEVICE_MODELS = [ 
+    "iPhone 14",
+    "iPhone 14 Pro",
+    "iPhone 14 Pro Max",
+    "iPhone 15",
+    "iPhone 15 Pro",
+    "iPhone 15 Pro Max",
+    "iPhone 16",
+    "iPhone 16 Pro",
+    "iPhone 16 Pro Max",
     "iPhone 17",
+    "iPhone 17 Pro",
+    "iPhone 17 Pro Max",
 ]
 
 def derive_device_model(phonenum: str) -> str:
     """按账号哈希派生独立机型。"""
-    
+
     digest = hashlib.md5(phonenum.encode()).digest()
     return DEVICE_MODELS[digest[0] % len(DEVICE_MODELS)]
 
