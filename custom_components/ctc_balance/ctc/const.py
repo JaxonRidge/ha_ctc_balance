@@ -47,7 +47,7 @@ SCENE_SLIDER = "1"        # 滑块验证
 
 # 设备机型
 DEFAULT_DEVICE_MODEL = "iPhone 16 Pro"
-DEVICE_MODELS = [
+DEVICE_MODELS = [ 
     "iPhone 14",
     "iPhone 14 Pro",
     "iPhone 14 Pro Max",

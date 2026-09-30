@@ -66,7 +66,7 @@ class AuthMixin(SliderMixin):
         ts = time.strftime("%Y%m%d%H%M%S")
         pad = lambda s, n: (s or "")[:n].ljust(n, "$")
         model_prefix = (self.device_model or DEFAULT_DEVICE_MODEL)[:10].ljust(10, " ")
-        plain = (model_prefix + "16.1." + self.uid[:12]
+        plain = (model_prefix + "26.7." + self.uid[:12]
                  + self.phone[:11] + ts[:14] + pad(code, 6)
                  + pad("0", 4) + pad("0.000000", 2))
         cipher = base64.b64encode(
@@ -78,7 +78,7 @@ class AuthMixin(SliderMixin):
               "isChinatelecom": self.isct or "1",
               "loginAuthCipherAsymmertric": cipher, "loginType": "2",
               "phoneNum": ENC(self.phone), "signSignatureString": "",
-              "systemVersion": "16.1.1"}
+              "systemVersion": "26.7.1"}
         j = self._login_post("userLoginNormal", fd,
                              hdr_extra={"userLoginName": ENC(self.phone), "timestamp": ts})
         LOGGER.debug("短信登录 userLoginNormal 响应: code=%s, desc=%s",
@@ -96,7 +96,7 @@ class AuthMixin(SliderMixin):
         ts = time.strftime("%Y%m%d%H%M00")
         device_id = (device_id or "").strip()
         model = derive_device_model(self.phone)
-        os_ver = "15.4.0"
+        os_ver = "26.7.1"
         # RSA 明文与可用实现逐字段一致
         plain = (f"{model} {os_ver}{device_id[:12]}{self.phone}{ts}{password}0$$$0.")
         cipher = base64.b64encode(
