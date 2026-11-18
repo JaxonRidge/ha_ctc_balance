@@ -1,9 +1,17 @@
 (async () => {
-  const CARD_VERSION = "v1.1.9";
+  const CARD_VERSION = "v1.1.10";
   console.log(
     `%cCTC Balance Card ${CARD_VERSION}`,
      "color: #000000ff; font-weight: bold; background: rgba(0,0,0,0.2); padding:3px 8px; border-radius:6px; backdrop-filter: blur(2px);"
   );
+
+  async function findBalanceEntity(h) {
+    try {
+      const ents = await h.connection.sendMessagePromise({ type: "config/entity_registry/list" });
+      const ent = ents.find(e => e.platform === "ctc_balance" && e.unique_id.endsWith("_balance") && !e.disabled_by && h.states[e.entity_id]);
+      return ent ? ent.entity_id : "";
+    } catch { return ""; }
+  }
 
   await Promise.race([customElements.whenDefined("ha-card"), customElements.whenDefined("ha-panel-lovelace")]);
   const LitElement = window.LitElement || Object.getPrototypeOf(customElements.get("ha-card"));
@@ -319,7 +327,7 @@
         return html`
           <ha-card style="padding:16px;">
             <div style="color:var(--error-color);font-weight:bold;">未找到实体</div>
-            <div style="font-size:12px;margin-top:4px;">请在编辑器中选择 sensor.ctc_balance_* 实体</div>
+            <div style="font-size:12px;margin-top:4px;">请在编辑器中选择余额实体</div>
           </ha-card>`;
       }
 
@@ -434,8 +442,8 @@
       .attr-value.over { color:var(--ctm-red); }
     `;
     static getConfigElement() { return document.createElement("ctc-balance-card-editor"); }
-    static getStubConfig(hass) { const auto = Object.keys(hass.states).find(e => e.startsWith("sensor.ctc_balance_") && e.endsWith("_balance"));
-      return { title: "CTC 套餐余量", more_info: true, style: "v2", entity: auto || ""};
+    static async getStubConfig(hass) { const auto = await findBalanceEntity(hass);
+      return { title: "CTC 套餐余量", more_info: true, style: "v2", entity: auto};
     }
   }
 
@@ -445,8 +453,7 @@
     set hass(h) {
       this._hass = h;
       if (h && this.config && !("entity" in this.config)) {
-        const auto = Object.keys(h.states).find(e => e.startsWith("sensor.ctc_balance_") && e.endsWith("_balance"));
-        if (auto) this._upd({ entity:auto });
+        findBalanceEntity(h).then(auto => { if (auto && this.config && !("entity" in this.config)) this._upd({ entity:auto }); });
       }
     }
     _upd(v) {this.dispatchEvent(new CustomEvent("config-changed", {detail:{ config:{ ...this.config, ...v } } }));}

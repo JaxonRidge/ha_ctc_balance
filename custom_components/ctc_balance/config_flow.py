@@ -164,7 +164,7 @@ class CtcBalanceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def _create_entry(self, phonenum: str, password: str, device_id: str) -> FlowResult:
         return self.async_create_entry(
-            title="CTC DLR.",
+            title=f"CTC - {phonenum[:3]}****{phonenum[7:]}",
             data={CONF_PHONENUM: phonenum, CONF_PASSWORD: password, CONF_DEVICE_ID: device_id},
             options={CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL},
         )

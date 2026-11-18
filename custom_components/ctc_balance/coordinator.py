@@ -276,7 +276,7 @@ class CtcBalanceCoordinator(DataUpdateCoordinator):
         masked_num = f"{phone[:3]}****{phone[7:]}"
         return DeviceInfo(
             identifiers={(DOMAIN, self.client.uid)},
-            name=f"CTC Balance {masked_num}",
+            name=masked_num,
             manufacturer="CTC DLR.",
             model=self.client.device_model,
             entry_type=DeviceEntryType.SERVICE,
